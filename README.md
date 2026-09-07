@@ -1,368 +1,335 @@
-Smart Toll Plaza Management & GIS Command Center
+# 🛣️ Smart Toll Plaza Management & GIS Command Center
 
-Python 3.9+Framework: StreamlitAI: FastALPR | YOLOv9GIS: Plotly MapboxLicense: MIT
+![Python](https://img.shields.io/badge/Python-3.9%2B-blue)
+![Framework](https://img.shields.io/badge/Framework-Streamlit-red)
+![Computer Vision](https://img.shields.io/badge/CV-FastALPR%20%7C%20YOLOv9-orange)
+![GIS](https://img.shields.io/badge/GIS-Plotly%20Mapbox-green)
+![License](https://img.shields.io/badge/License-MIT-yellow)
 
-An enterprise-grade, full-stack Python application designed to simulate and manage the National Highways Authority of India (NHAI) transit and toll infrastructure.
+A full-stack Python simulation of a National Highways Authority of India (NHAI)-style toll operations platform. It combines a live, camera-driven ANPR (Automatic Number Plate Recognition) pipeline, a searchable Pan-India GIS map of 2,000+ toll plazas, congestion-based dynamic pricing, and role-gated financial/security reporting — all running on a single Streamlit multi-page app.
 
-The platform integrates an AI-powered Automatic Number Plate Recognition (ANPR) engine, a high-performance Pan-India Geographical Information System (GIS) matrix, dynamic congestion pricing, and financial reconciliation auditing.
+> **Status:** Prototype / simulation. Not connected to any live FASTag, VAHAN, or NHAI production system.
 
-SYSTEM ARCHITECTURE & KEY MODULES
+---
 
+## Table of Contents
+
+- [System Architecture](#system-architecture)
+- [Core Modules](#core-modules)
+- [Role-Based Access Control](#role-based-access-control-rbac)
+- [Data Layer](#data-layer)
+- [Tech Stack](#tech-stack)
+- [Installation & Setup](#installation--setup)
+- [Demo Credentials](#demo-credentials)
+- [Application Workflow](#application-workflow)
+- [Dynamic Pricing Logic](#dynamic-pricing-logic)
+- [Plate Validation Logic](#plate-validation-logic)
+- [Security & Audit Trail](#security--audit-trail)
+- [Known Limitations](#known-limitations)
+- [Roadmap](#roadmap)
+- [Disclaimer](#disclaimer)
+- [License](#license)
+
+---
+
+## System Architecture
+
+```
 smart-toll-plaza-system/
-
-├── app.py│ Central IAM Authentication & Landing Portal
-
-├── database.py│ CloudSQLAdapter ORM, Dynamic Pricing & Logic
-
-├── TOLL\_PLAZA\_LIST @26 may 2026.csv│ Pan-India 2,000+ Plaza Geospatial Dataset
-
-├── cloud\_mock\_db.json│ Persistent Mock Database (Cloud SQL Ready)
-
-├── requirements.txt│ Project Dependencies
-
+├── app.py                                    # IAM login portal & role router (entry point)
+├── database.py                                # CloudSQLAdapter (JSON-backed ORM) + pricing/validation logic
+├── cloud_mock_db.json                         # Persistent store: transactions, audit log, shift closures, blacklist
+├── TOLL_PLAZA_LIST @26 may 2026.csv            # Pan-India toll plaza geospatial registry (2,005 records)
+├── toll_plaza_odisha.db                        # SQLite export of the mock DB (transactions / vahan_blacklist / security_audit)
+├── India_Map_for_plaza_and_NH.pdf              # Reference map of national highway corridors
+├── requirements.txt                            # Project dependencies
 └── pages/
+    ├── 1_📸_Live_Camera.py                     # WebRTC video feed, FastALPR inference, FASTag/cash checkout
+    ├── 2_🗺️_GIS_Command_Center.py               # Pan-India plaza map, filters, node profile cards
+    └── 3_📊_Analytics.py                        # Revenue, security audit & shift reconciliation dashboards
+```
 
-Plain textANTLR4BashCC#CSSCoffeeScriptCMakeDartDjangoDockerEJSErlangGitGoGraphQLGroovyHTMLJavaJavaScriptJSONJSXKotlinLaTeXLessLuaMakefileMarkdownMATLABMarkupObjective-CPerlPHPPowerShell.propertiesProtocol BuffersPythonRRubySass (Sass)Sass (Scss)SchemeSQLShellSwiftSVGTSXTypeScriptWebAssemblyYAMLXML`   ├── 1_📸_Live_Camera.py    │   Hardware Stream, FastALPR & NETC FASTag Gateway  ├── 2_🗺️_GIS_Command_Center.py    │   Pan-India Infrastructure Mapping & Spatial Filters  └── 3_📊_Analytics.py        Financial Telemetry, Security Audit & Shift Closure   `
+Streamlit's native multi-page routing is used: `app.py` is the landing/auth page, and each file under `pages/` becomes a sidebar-navigable screen, gated by the role stored in `st.session_state`.
 
-CORE FEATURES
+---
 
-1.  📸 AI-POWERED ANPR & PAYMENT PROCESSING
-    
+## Core Modules
 
-File: 1\_📸\_Live\_Camera.py
+### 📸 Live Camera — ANPR & Payment Processing
+**File:** `pages/1_📸_Live_Camera.py`
 
-• Computer Vision & OCREmploys fast\_alpr using YOLO-v9 license plate detection and MobileViT OCR for optical extraction.
+- **Continuous video pipeline** via `streamlit-webrtc`, processing every 3rd frame to balance latency and throughput.
+- **Plate detection & OCR** via `fast_alpr.ALPR`, running a YOLOv9 detector (`yolo-v9-t-384-license-plate-end2end`) and a MobileViT-based OCR model (`global-plates-mobile-vit-v2-model`), cached as a Streamlit resource so the model loads once per session.
+- **Confidence gating** — OCR results below a `0.50` confidence threshold are discarded.
+- **Regex-validated plate formats:**
+  - Standard: `AA00AA0000` (e.g. `OD02AB1234`)
+  - Bharat Series: `00BH0000AA` (e.g. `21BH1234AA`)
+  - Diplomatic / UN: `CD`, `CC`, `UN` prefixed short codes (e.g. `77CD12`, `UN4567`)
+- **Detection queue** — a thread-safe `queue.Queue` bridges the WebRTC video processor thread and the main Streamlit thread; a `st.fragment(run_every="1s")` polls it without re-running the whole page.
+- **Checkout flow:**
+  - Diplomatic/VIP plates → logged as a zero-cost exempt passage.
+  - Blacklisted plates (cross-checked against `vahan_blacklist`) → flagged as a security anomaly, logged to the audit trail.
+  - All other plates → operator chooses **FASTag Auto-Deduct** (simulated NETC handshake with artificial latency and a ~10% random decline rate) or **Cash**.
 
-• Intelligent Regex FilteringEnforces Indian license plate syntax validation across:
+### 🗺️ GIS Command Center — Pan-India Infrastructure Map
+**File:** `pages/2_🗺️_GIS_Command_Center.py`
 
-*   Standard plates: OD02AB1234
-    
-*   Bharat Series: 21BH1234AA
-    
-*   Diplomatic / UN plates: 77CD12, UN4567
-    
+- Loads `TOLL_PLAZA_LIST @26 may 2026.csv` (2,005 plazas) with `@st.cache_data(ttl=3600)`, coercing latitude/longitude to numeric and dropping unmappable rows.
+- Renders plazas with `plotly.express.scatter_mapbox` on a `carto-positron` basemap.
+- Pre-compiles hover HTML per row with vectorized Pandas string concatenation to keep rendering fast at scale.
+- Sidebar filters: **State/UT** (multiselect), **Infrastructure Type** (plaza sub-type), **Operating Authority** (concessionaire type).
+- Click-to-select: clicking a node on the map (`on_select="rerun"`) surfaces a persistent detail card (plaza code, state, city, concessionaire, sub-type, coordinates) without resetting the map viewport.
+- Restricted to the **Regional Director** role.
 
-• NETC FASTag Gateway SimulationSimulates bank network API handshakes with latency, balance authorization, and decline handlers.
+### 📊 Analytics — Financial & Security Oversight
+**File:** `pages/3_📊_Analytics.py`
 
-• Security & VAHAN InterceptionCross-references incoming plates against blacklisted stolen/defaulter records to trigger law enforcement alerts.
+- **Financial Ledger tab** — total revenue, transaction count, active node, a FASTag-vs-Cash adoption donut chart, and a revenue-by-vehicle-class bar chart, backed by the `transactions` table.
+- **Security Audit tab** — a live feed of `security_audit` records (blacklist interceptions, FASTag declines, VIP exemptions).
+- **Shift Closure tab** *(Plaza Operator only)* — compares system-calculated expected cash against a manually entered physical cash count, logs the variance, and flags overage/shrinkage.
 
-• Automatic VIP / Diplomatic ExemptionRecognizes diplomatic identifiers such as CD, CC, and UN and logs verified zero-cost passages.
+---
 
-1.  🗺️ PAN-INDIA GIS INFRASTRUCTURE MATRIX
-    
+## Role-Based Access Control (RBAC)
 
-File: 2\_🗺️\_GIS\_Command\_Center.py
+Authentication is handled in `app.py` against a hardcoded `RBAC_USERS` dictionary (demo-only — see [Known Limitations](#known-limitations)). The resolved role and assigned node are stored in `st.session_state` and checked at the top of every page.
 
-• 2,000+ Operational Node VisualizationUses Plotly Mapbox with carto-positron to plot the national highway grid across all states.
+| Capability | Regional Director | Plaza Operator |
+|---|:---:|:---:|
+| Live Camera ANPR & FASTag processing | ✅ | ✅ |
+| GIS Command Center (Pan-India map) | ✅ | ❌ |
+| Financial Ledger & Security Audit | ✅ | ✅ |
+| Shift Closure reconciliation | ❌ | ✅ |
+| Node scope | All Nodes (Pan-India) | Single assigned plaza |
 
-• Payload Compression EnginePre-compiles HTML hover data through vectorized Pandas operations to reduce browser rendering latency.
+---
 
-• Zero-Toll Region AwarenessDynamically alerts operators when querying states or UTs with zero operational toll plazas:
+## Data Layer
 
-*   Tripura
-    
-*   Mizoram
-    
-*   Manipur
-    
-*   Nagaland
-    
-*   Andaman & Nicobar Islands
-    
-*   Lakshadweep
-    
-*   Arunachal Pradesh
-    
-*   Sikkim
-    
+`database.py` defines `CloudSQLAdapter`, a lightweight ORM-style wrapper intended to be swappable for a real Cloud SQL / Supabase / PostgreSQL backend. In its current form it persists to a single JSON file, `cloud_mock_db.json`, with four collections:
 
-• Persistent Interactive ProfilesCaptures on-click node events to isolate selected infrastructure metadata cards without resetting the viewport.
+| Collection | Written by | Purpose |
+|---|---|---|
+| `transactions` | Live Camera checkout | Every toll transaction (plate, vehicle type, payment method, amount, exemption flag) |
+| `security_audit` | Live Camera, blacklist checks | VIP exemptions, blacklist interceptions, FASTag declines |
+| `shift_closures` | Analytics → Shift Closure | Operator cash reconciliation records |
+| `vahan_blacklist` | Seeded at first run | Stolen/defaulter plate registry checked on every detection |
 
-1.  💰 DYNAMIC PRICING & FINANCIAL OVERSIGHT
-    
+A parallel SQLite export, `toll_plaza_odisha.db`, mirrors the `transactions`, `vahan_blacklist`, and `security_audit` schemas and can be used as a starting point for migrating the adapter to a real SQL engine.
 
-Files: database.py & 3\_📊\_Analytics.py
+The geospatial registry (`TOLL_PLAZA_LIST @26 may 2026.csv`) contains **2,005 plazas** across **27 states/UTs**, with columns: `PLAZA CODE`, `PLAZA NAME`, `CONCESSIONAIRE TYPE`, `PLAZA SUB TYPE`, `STATE`, `CITY`, `LATITUDE`, `LONGITUDE`.
 
-• Congestion / Surge PricingAutomatically detects peak traffic windows:
+---
 
-*   08:00–10:00
-    
-*   17:00–20:00
-    
+## Tech Stack
 
-A 15% tariff multiplier is applied during these periods.
+**Frontend / App Framework**
+- Streamlit (multi-page app, `st.fragment` for polling, `st.session_state` for auth)
+- Plotly Express (Mapbox scatter map, bar/pie charts)
 
-• Operator Shift ReconciliationEnables physical cash drawer auditing against system receipts, logging positive overage or negative shrinkage variances.
+**Computer Vision**
+- `fast-alpr` (YOLOv9 plate detector + MobileViT OCR)
+- `streamlit-webrtc` + `av` (live browser video stream ↔ server-side frame processing)
+- OpenCV, NumPy
 
-• Visual TelemetryVisualizes real-time revenue breakdowns by vehicle class and payment method adoption, including FASTag and Cash.
+**Data & Backend**
+- Pandas (data loading, aggregation, hover-text pre-compilation)
+- Regular expressions (plate validation)
+- JSON-backed `CloudSQLAdapter` (migration-ready toward Supabase/PostgreSQL)
+- SQLite (reference export)
 
-1.  🔐 ROLE-BASED ACCESS CONTROL (RBAC)
-    
+---
 
-Regional Director:
+## Installation & Setup
 
-• Full administrative clearance• Pan-India GIS maps• Nationwide analytics• Security audit tables• Infrastructure monitoring• Financial telemetry
-
-Plaza Operator:
-
-• Localized terminal access• Live Camera ANPR• FASTag transaction processing• Shift Closure reconciliation
-
-TECH STACK
-
-Frontend / Framework:
-
-• Streamlit• Plotly Express• Plotly Graph Objects
-
-Machine Learning / Computer Vision:
-
-• FastALPR• YOLOv9• MobileViT OCR• OpenCV• NumPy
-
-Data Processing & Geospatial:
-
-• Pandas• Regular Expressions (re)• Plotly Mapbox
-
-Database / Backend:
-
-• Python• JSON-based ORM• CloudSQLAdapter• Supabase / PostgreSQL migration-ready architecture
-
-INSTALLATION & SETUP
-
-1.  CLONE THE REPOSITORY
-    
-
-git clone [https://github.com/](https://github.com/)/smart-toll-plaza-system.git
-
+### 1. Clone the repository
+```bash
+git clone https://github.com/<your-username>/smart-toll-plaza-system.git
 cd smart-toll-plaza-system
+```
 
-1.  CREATE A VIRTUAL ENVIRONMENT
-    
+### 2. Create a virtual environment
 
-Windows:
-
+**Windows**
+```bash
 python -m venv venv
+venv\Scripts\activate
+```
 
-venv\\Scripts\\activate
-
-macOS / Linux:
-
+**macOS / Linux**
+```bash
 python3 -m venv venv
-
 source venv/bin/activate
+```
 
-1.  INSTALL DEPENDENCIES
-    
-
-pip install streamlit pandas numpy plotly opencv-python-headless fast-alpr
-
-Or:
-
+### 3. Install dependencies
+```bash
 pip install -r requirements.txt
+```
 
-1.  ENSURE DATASET PLACEMENT
-    
+`requirements.txt` should include, at minimum:
+```
+streamlit
+pandas
+numpy
+plotly
+opencv-python-headless
+av
+streamlit-webrtc
+fast-alpr
+```
 
-Verify that:
+> **Note:** `fast-alpr` will download its YOLOv9 detector and MobileViT OCR weights on first run — this requires an internet connection the first time `1_📸_Live_Camera.py` is opened.
 
-TOLL\_PLAZA\_LIST @26 may 2026.csv
+### 4. Place the dataset
+Confirm `TOLL_PLAZA_LIST @26 may 2026.csv` sits in the project root, alongside `app.py` — the GIS module reads it by relative path.
 
-is located in the project root directory alongside app.py.
-
-1.  LAUNCH THE APPLICATION
-    
-
+### 5. Launch
+```bash
 streamlit run app.py
+```
 
-DEMO ACCESS CREDENTIALS
+The Live Camera page additionally requires browser camera permission (WebRTC) and, for real-world use outside `localhost`, HTTPS/TURN configuration for `streamlit-webrtc`.
 
-NOTE: These credentials are intended only for local/demo environments. Do not use real credentials in source code or public repositories.
+---
 
-Role: Regional Director
+## Demo Credentials
 
-Enterprise Email:[director@nhai.gov](mailto:director@nhai.gov)
+> ⚠️ Local/demo use only. These are hardcoded plaintext values in `app.py` — **never reuse this pattern in a production system.**
 
-Authentication Token:admin88
+| Role | Enterprise Email | Token | Node Access |
+|---|---|---|---|
+| Regional Director | `director@nhai.gov` | `admin88` | All Nodes (Pan-India) |
+| Plaza Operator | `op1@manguli.nhai` | `toll2026` | Manguli Toll Plaza (Cuttack) |
 
-Node Access:All Nodes (Pan-India)
+---
 
-Role: Plaza Operator
+## Application Workflow
 
-Enterprise Email:[op1@manguli.nhai](mailto:op1@manguli.nhai)
+```
+Login (app.py)
+    → RBAC validation against RBAC_USERS
+    → Role stored in st.session_state
+    → Sidebar page routing
 
-Authentication Token:toll2026
+Regional Director          Plaza Operator
+  ├─ GIS Command Center       ├─ Live Camera
+  └─ Analytics                ├─ Analytics
+                               └─ Shift Closure
 
-Node Access:Manguli Toll Plaza (Cuttack)
+Live Camera pipeline:
+  Camera stream (WebRTC)
+    → Frame sampled (1 in 3)
+    → YOLOv9 plate detection
+    → MobileViT OCR
+    → Confidence ≥ 0.50 & regex match
+    → Pushed to detection queue
+    → Polled every 1s in main thread
+    → Exempt check (CD/CC/UN)
+    → Blacklist check (vahan_blacklist)
+    → Dynamic toll calculated
+    → FASTag (simulated NETC) or Cash
+    → Transaction + audit record written
+```
 
-APPLICATION WORKFLOW
+---
 
-User Login↓RBAC Validation↓Role Selection↓Regional Director / Plaza Operator↓Regional Director:GIS + Analytics + Security
+## Dynamic Pricing Logic
 
-Plaza Operator:Live ANPR + FASTag + Shift Closure↓Vehicle Detection↓ANPR / OCR↓License Plate Validation↓Vehicle Classification↓Blacklist Check↓VIP / Diplomatic Check↓FASTag Authorization↓Dynamic Toll Calculation↓Transaction Recording↓Audit & Reconciliation
+Defined in `database.py::get_dynamic_pricing()`, based on the server's current hour:
 
-TOLL TRANSACTION PROCESSING
+| Window | Multiplier |
+|---|---|
+| 08:00 – 10:00 (Morning Peak) | × 1.15 |
+| 17:00 – 20:00 (Evening Peak) | × 1.15 |
+| All other hours | × 1.00 |
 
-1.  Vehicle enters the toll lane.
-    
-2.  Camera captures the vehicle image.
-    
-3.  ANPR detects the license plate.
-    
-4.  OCR extracts the registration number.
-    
-5.  Regex validation verifies the plate format.
-    
-6.  Vehicle classification is determined.
-    
-7.  Blacklist / security records are checked.
-    
-8.  VIP or diplomatic exemption is evaluated.
-    
-9.  FASTag balance authorization is simulated.
-    
-10.  Dynamic pricing is calculated.
-    
-11.  Transaction is recorded.
-    
-12.  Audit trail is generated.
-    
+Base rates by vehicle class:
 
-DYNAMIC PRICING LOGIC
+| Vehicle Class | Base Toll (₹) |
+|---|---|
+| Car/Jeep/Van | 100 |
+| LCV (Light Commercial) | 160 |
+| Bus/2-Axle Truck | 320 |
+| Multi-Axle (3+) | 500 |
+| Oversized Vehicle | 650 |
 
-Peak Hours:
+```
+Final Toll = Base Toll × (1.15 if peak hour else 1.0)
+```
 
-Morning Peak:08:00 – 10:00
+> In the current build, `1_📸_Live_Camera.py` assigns a vehicle class deterministically from the plate string length rather than true visual classification — a placeholder pending real vehicle-classification integration (see [Roadmap](#roadmap)).
 
-Evening Peak:17:00 – 20:00
+---
 
-During peak hours:
+## Plate Validation Logic
 
-Final Toll = Base Toll × 1.15
+Two independent regex layers exist across the codebase:
 
-Outside peak hours:
+- `database.py` — general-purpose state-code + exemption matcher, used for exemption checks and validation helpers (`is_exempt`, `validate_indian_plate`).
+- `1_📸_Live_Camera.py` — a stricter OCR-output pattern (`PLATE_REGEX`) that anchors the full string to standard, Bharat Series, and diplomatic/UN formats before a detection is accepted.
 
-Final Toll = Base Toll
+Recognized exemption prefixes: `CD`, `CC`, `UN` (diplomatic and UN corps vehicles), granted a zero-cost passage and logged to the audit trail.
 
-SECURITY & DATA INTEGRITY
+---
 
-Immutable Audit Trails:
+## Security & Audit Trail
 
-The application records:
+Every sensitive event is written to `security_audit` with a unique `AUD-XXXXXXXX` identifier:
+- Blacklist interceptions (cross-referenced against `vahan_blacklist`)
+- FASTag wallet declines
+- VIP/diplomatic exemptions granted
 
-• Manual overrides• VIP exemptions• FASTag wallet declines• Blacklisted vehicle interceptions• Law enforcement alerts• Financial reconciliation events
+Shift closures are logged separately with a `SHF-XXXXXXXX` identifier, recording operator, plaza, expected cash, actual cash, and variance.
 
-Each audit event receives a unique identifier similar to:
+Defensive data loading in the GIS module coerces coordinate columns to numeric and drops rows that fail, so a malformed CSV row cannot crash the map.
 
-AUD-XXXXXXXX
+---
 
-Defensive Data Parsing:
+## Known Limitations
 
-During dataset loading:
+This is a simulation/prototype, and the following should be addressed before any production use:
 
-• Coordinates are validated.• Numeric attributes are coerced.• Invalid spreadsheet values are handled defensively.• Malformed records are prevented from crashing the application.
+- **Plaintext credentials** hardcoded in `app.py` — no hashing, no external IAM/JWT integration despite the code comment referencing Auth0/Cognito.
+- **No real FASTag/NETC connectivity** — payment authorization is a `random.random()` mock with artificial latency.
+- **Vehicle classification is a placeholder** — derived from plate string length, not actual visual inference.
+- **JSON-file persistence** (`cloud_mock_db.json`) is not concurrency-safe and unsuitable for multi-instance deployment.
+- **WebRTC in production** requires TURN/STUN and HTTPS configuration not covered by local `streamlit run`.
 
-ANALYTICS DASHBOARD
+---
 
-The analytics module provides:
+## Roadmap
 
-• Total revenue• Cash collection• FASTag collection• Revenue by vehicle class• Transaction counts• Shift variance• Blacklisted vehicle interceptions• Failed transactions• Manual overrides• VIP exemptions• Security events• Vehicle throughput• Payment-method distribution
+- [ ] Real-time CCTV / RTSP camera integration
+- [ ] Production-grade ANPR deployment (edge inference)
+- [ ] Real NETC/FASTag API integration
+- [ ] PostgreSQL / Supabase migration for `CloudSQLAdapter`
+- [ ] Cloud deployment (containerized)
+- [ ] Real-time WebSocket telemetry
+- [ ] True vehicle classification (visual, not string-length heuristic)
+- [ ] Multi-lane toll monitoring
+- [ ] SMS/email security alerts
+- [ ] Mobile operator dashboard
+- [ ] Predictive traffic analytics
+- [ ] AI-based anomaly detection
+- [ ] Multi-factor authentication
+- [ ] Encrypted audit logs
 
-GIS COMMAND CENTER
+---
 
-The GIS module provides:
+## Disclaimer
 
-• Interactive toll plaza mapping• State / UT filtering• Toll plaza search• Infrastructure metadata• Geographic coordinates• Operational node visualization• Selected-plaza information cards
+This project is a software simulation intended for educational, research, demonstration, and hackathon purposes. It does not represent an official NHAI system and must not be connected to real toll infrastructure, FASTag banking systems, government databases (VAHAN), or law-enforcement systems without appropriate authorization, security review, and regulatory compliance.
 
-EXAMPLE PLATE FORMATS
+---
 
-OD02AB1234
+## License
 
-MH12CD5678
+Distributed under the **MIT License**.
 
-DL01AB1234
+---
 
-21BH1234AA
-
-77CD12
-
-UN4567
-
-These examples are illustrative and should not be interpreted as validation of every possible Indian registration format.
-
-FUTURE ENHANCEMENTS
-
-☐ Real-time CCTV camera integration
-
-☐ Production-grade ANPR deployment
-
-☐ Real NETC / FASTag API integration
-
-☐ PostgreSQL / Supabase migration
-
-☐ Cloud deployment
-
-☐ Real-time WebSocket telemetry
-
-☐ Advanced vehicle classification
-
-☐ Multi-lane toll monitoring
-
-☐ SMS / Email security alerts
-
-☐ Mobile operator dashboard
-
-☐ Predictive traffic analytics
-
-☐ AI-based anomaly detection
-
-☐ Automated incident reporting
-
-☐ Multi-factor authentication
-
-☐ Encrypted audit logs
-
-DEPLOYMENT
-
-Typical deployment workflow:
-
-GitHub Repository↓Python Environment↓Install requirements.txt↓Configure Database↓Configure Secrets↓Start Streamlit↓Smart Toll Plaza Dashboard
-
-For production deployment, sensitive credentials and API keys should be stored using environment variables or the platform's secrets-management system.
-
-DISCLAIMER
-
-This project is a software simulation / prototype intended for educational, research, demonstration, and hackathon purposes.
-
-It does not represent an official NHAI system and should not be connected to real toll infrastructure, FASTag banking systems, government databases, or law-enforcement systems without appropriate authorization, security controls, and regulatory compliance.
-
-CONTRIBUTING
-
-Contributions, suggestions, and improvements are welcome.
-
-Suggested workflow:
-
-git clone [https://github.com/](https://github.com/)/smart-toll-plaza-system.git
-
-cd smart-toll-plaza-system
-
-git checkout -b feature/new-feature
-
-git add .
-
-git commit -m "Add new feature"
-
-git push origin feature/new-feature
-
-Then open a Pull Request on GitHub.
-
-LICENSE
-
-Distributed under the MIT License.
-
-See the LICENSE file for more information.
-
-SUPPORT
-
-If you find this project useful, consider giving the repository a ⭐ on GitHub.
-
-Smart Toll Plaza Management & GIS Command Center
-
+<p align="center">
+<strong>Smart Toll Plaza Management & GIS Command Center</strong><br/>
 AI • GIS • ANPR • FASTag • Analytics • Security
+</p>
